@@ -1,0 +1,2 @@
+run_id,d_model,n_heads,n_layers,d_ff,lr,dropout,batch_size,max_seq_len,val_loss,val_acc_sentiment,val_metric_derived,notes
+run_001,128,4,2,512,0.0003,0.1,32,128,0.5976115898973138,0.8507407407407407,0.8648148148148148,Initial encoder-only training
