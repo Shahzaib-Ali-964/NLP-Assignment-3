@@ -1,137 +1,164 @@
-# CS-4063 NLP Assignment 3: Transformer RAG Pipeline
+# CS-4063 NLP Assignment 3 — From-Scratch RAG Pipeline
+
+**Student:** 22i-0576  
+**Course:** CS-4063 Natural Language Processing  
+**Semester:** Fall 2024 — Semester 7
 
 ![PyTorch](https://img.shields.io/badge/PyTorch-%23EE4C2C.svg?style=for-the-badge&logo=PyTorch&logoColor=white)
 ![HuggingFace](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Datasets-blue?style=for-the-badge)
 ![Gradio](https://img.shields.io/badge/Gradio-FF7C00?style=for-the-badge&logo=gradio&logoColor=white)
 ![Jupyter Notebook](https://img.shields.io/badge/jupyter-%23FA0F00.svg?style=for-the-badge&logo=jupyter&logoColor=white)
 
-A fully native, from-scratch PyTorch implementation of a Retrieval-Augmented Generation (RAG) pipeline. This project orchestrates a Multi-Task Encoder-Only Transformer, a Dense Vector Retrieval Store, and an Autoregressive Decoder-Only Transformer entirely devoid of pre-trained modules (e.g., `nn.Transformer` or `transformers`).
+A fully hand-written, from-scratch PyTorch implementation of a Retrieval-Augmented Generation (RAG) pipeline for Amazon product review analysis. The system combines a joint-classification encoder, a cosine-similarity vector index, and a causal decoder-only text generator — all built without any pre-trained modules (no `nn.Transformer`, no `transformers`, no `BertModel`).
 
 ---
 
-## 📖 Table of Contents
-- [Project Architecture](#project-architecture)
-- [Directory Structure](#directory-structure)
-- [Key Components](#key-components)
-- [Installation & Setup](#installation--setup)
-- [Usage & Execution](#usage--execution)
-- [Ablation Study Results](#ablation-study-results)
+## Table of Contents
+- [Overview](#overview)
+- [Pipeline Architecture](#pipeline-architecture)
+- [Repository Layout](#repository-layout)
+- [System Components](#system-components)
+- [Environment Setup](#environment-setup)
+- [Running the Project](#running-the-project)
+- [Ablation Results](#ablation-results)
 
 ---
 
-## 🏗️ Project Architecture
+## Overview
 
-This project strictly adheres to a completely custom-built Transformer topology, mathematically defined without high-level shortcuts.
+This assignment implements a complete NLP pipeline across seven sequential phases:
+
+| Phase | Description |
+|-------|-------------|
+| 0 | Runtime initialization — global `PARAMS`, seed fixing, directory creation |
+| 1 | Dataset ingestion — streaming 36,000 Amazon reviews; stratified CSV splits |
+| 2 | Encoder architecture — custom `AttentionLayer`, `TransformerEncoderLayer`, `SinusoidalPE` |
+| 3 | Encoder training — joint polarity + category loss; AdamW + ReduceLROnPlateau |
+| 4 | Vector retrieval — L2-normalized corpus index with cosine k-NN search |
+| 5 | Decoder architecture — causal `TextGenerator` with autoregressive masking |
+| 6 | Decoder training — teacher-forcing on RAG-augmented prompts |
+| 7 | Evaluation — perplexity comparison (RAG vs. no-RAG), sample generation |
+
+---
+
+## Pipeline Architecture
 
 ```mermaid
 graph TD
-    A[Raw Amazon Reviews Stream] -->|HuggingFace datasets| B(Preprocessing & Stratification)
-    B -->|Tokenized CSV| C[Data/train.csv, val.csv]
-    
-    C --> D[Multi-Task Encoder-Only Transformer]
-    D -->|Sentiment & Category Loss| E[Models/encoder.pt]
-    D -->|L2 Normalized cls| F[EmbeddingStore]
-    
-    F -->|Top-K Cosine Sim| G[Retrieved Context Sequences]
-    
-    C --> H[Decoder-Only Transformer]
-    G --> H
-    H -->|Autoregressive Generation| I[Models/decoder.pt]
-    
-    I --> J((Gradio Web UI))
+    A[Amazon Reviews HuggingFace Stream] -->|fetch_category_reviews| B(Preprocessing & Stratified Split)
+    B -->|Lexicon build + ReviewCorpus| C[Data/train.csv · val.csv · test.csv]
+
+    C --> D[JointClassificationModel - TextEncoder backbone]
+    D -->|Polarity + Category CE loss| E[checkpoints/encoder.pt]
+    D -->|[BOS] pooled repr_vec| F[VectorIndex - L2-Normalized]
+
+    F -->|find_nearest cosine k-NN| G[Retrieved Context Docs]
+
+    C --> H[TextGenerator - Decoder-Only]
+    G -->|construct_generation_prompt| H
+    H -->|autoregressive_decode| I[checkpoints/decoder.pt]
+
+    I --> J((Gradio Web UI — app.py))
 ```
 
 ---
 
-## 📁 Directory Structure
-
-The project dynamically generates and structures the following hierarchy upon successful execution of the build script:
+## Repository Layout
 
 ```text
-📦 NLP_Assign_03
-├── 📜 i222146-NLP-Assignment3.ipynb  # Primary fully executed Jupyter Notebook
-├── 📜 Report.docx                    # Academic 3-page methodology & analytics report
-├── 📂 implementation/
-│   ├── 📜 app.py                     # Gradio Interactive Web UI
-│   ├── 📜 build_final.py             # Script to assemble and execute the Notebook
-│   ├── 📜 generate_report_v2.py      # Script generating the Report.docx
-│   ├── 📂 Data/                      
-│   │   ├── train.csv                 # 70% Stratified Training Split
-│   │   ├── val.csv                   # 15% Validation Split
-│   │   └── test.csv                  # 15% Testing Split
-│   ├── 📂 models/
-│   │   ├── encoder.pt                # Trained weights for Multi-Task Encoder
-│   │   └── decoder.pt                # Trained weights for Causal Decoder
-│   └── 📂 results/
-│       ├── encoder_loss.png          # Plotted trajectory of validation loss
-│       ├── hyperparam_log.csv        # Metrics log file
-│       ├── train_embeddings.pt       # Serialized L2-Normalized dense vectors
-│       └── train_metadata.pt         # Index mapping for the Embedding Store
+NLP_Assign_03/
+├── i220576-NLP-Assignment3.ipynb     # Main notebook (roll number 22i-0576)
+├── README.md                         # This file
+├── requirements.txt                  # Pinned dependency list
+└── implementation/
+    ├── app.py                        # Gradio interactive demo
+    ├── build_final.py                # End-to-end pipeline rebuild script
+    ├── generate_report_v2.py         # Auto-generates Report.docx
+    ├── Data/
+    │   ├── train.csv                 # 70% stratified training split  (25,200 rows)
+    │   ├── val.csv                   # 15% validation split           ( 5,400 rows)
+    │   └── test.csv                  # 15% held-out test split        ( 5,400 rows)
+    ├── models/
+    │   ├── encoder.pt                # Saved JointClassificationModel weights
+    │   └── decoder.pt                # Saved TextGenerator weights
+    └── results/
+        ├── encoder_loss.png          # Training vs. validation loss curve
+        ├── hyperparam_log.csv        # Per-run metric log
+        ├── train_embeddings.pt       # Serialized L2-normalized corpus vectors
+        └── train_metadata.pt         # Metadata mapping (texts, labels, indices)
 ```
 
 ---
 
-## 🧩 Key Components
+## System Components
 
-### 1. Multi-Task Encoder-Only Transformer
-Built using a custom `MultiHeadAttention` module, this bidirectional transformer maps sequential discrete tokens into a continuous $d_{model}=128$ space. It utilizes a pseudo `[BOS]` token to extract sequence-level semantics. The network splits into two distinct `nn.Linear` classifiers optimizing simultaneously via:
-$Loss = 1.0 \times L_{Sentiment} + 0.5 \times L_{Category}$
+### 1. Joint Classification Encoder (`JointClassificationModel`)
+A stack of custom `TransformerEncoderLayer` blocks with sinusoidal positional encodings (`SinusoidalPE`). The `[BOS]` token acts as a CLS-style aggregate representation. Two independent linear heads predict:
+- **Polarity** (Negative / Neutral / Positive)
+- **Product Category** (Electronics / Books / Clothing)
 
-### 2. Dense Embedding Store (Retrieval Module)
-To bypass complex third-party indexing (like FAISS), this module calculates pure exact k-NN inner dot products. Since all vectors are $L_2$ normalized, the dot product perfectly equates to Cosine Similarity. It seamlessly extracts the Top-2 highly semantic context reviews.
+Combined training objective:
 
-### 3. Prefix-LM Decoder-Only Transformer
-To satisfy the RAG text-generation requirement, the system relies on an Autoregressive Decoder bounded by an explicit Upper Triangular Boolean Mask ($-\infty$). Rather than scaling quadratically with Cross-Attention caches, the retrieved texts are concatenated as prompts (Prefix-LM logic).
+$$\mathcal{L} = \lambda_s \cdot \mathcal{L}_{\text{sentiment}} + \lambda_c \cdot \mathcal{L}_{\text{category}} = 1.0 \cdot CE_{\text{sent}} + 0.5 \cdot CE_{\text{cat}}$$
 
----
+### 2. Vector Retrieval Index (`VectorIndex`)
+Corpus embeddings are L2-normalized at load time so that inner-product search is equivalent to cosine similarity:
 
-## 🛠️ Installation & Setup
+$$\text{sim}(q, d) = \frac{q \cdot d}{\|q\| \|d\|} = \hat{q} \cdot \hat{d}$$
 
-Ensure you are operating in a Python `3.10+` environment.
+`find_nearest()` calls `torch.topk` on the dot-product scores — no external indexing library required.
 
-1. **Activate your Virtual Environment** (Optional but recommended):
-    ```bash
-    python -m venv nlpvenv
-    .\nlpvenv\Scripts\activate  # Windows
-    source nlpvenv/bin/activate # Linux/Mac
-    ```
-
-2. **Install Dependencies**:
-    The project leverages fundamental data science logic. 
-    ```bash
-    pip install torch datasets pandas matplotlib scikit-learn jupyter python-docx gradio
-    ```
-    *Note: `transformers` is intentionally omitted to respect the "from scratch" constraint.*
+### 3. Causal Text Generator (`TextGenerator`)
+A decoder-only transformer using an upper-triangular boolean mask to enforce autoregressive ordering. Retrieved context passages are prepended to the generation prefix (Prefix-LM style). Inference uses greedy decoding via `autoregressive_decode()`.
 
 ---
 
-## 🚀 Usage & Execution
+## Environment Setup
 
-### 1. The Interactive RAG UI (Gradio)
-To immediately interact with the fully trained pipeline without diving into code:
+Requires **Python 3.10+**.
+
+1. Create and activate a virtual environment:
+    ```bash
+    python -m venv nlp_env
+    .\nlp_env\Scripts\activate   # Windows
+    source nlp_env/bin/activate  # Linux / macOS
+    ```
+
+2. Install dependencies:
+    ```bash
+    pip install -r requirements.txt
+    ```
+    > `transformers` is deliberately excluded — all model code is written from scratch.
+
+---
+
+## Running the Project
+
+### Interactive Demo (Gradio UI)
 ```bash
 cd implementation
 python app.py
 ```
-This launches a local web server (typically `http://127.0.0.1:7860`). You can type any product review, and the UI will output the Sentiment, Category, Retrieved Context, and the Autoregressive Rationale.
+Launches at `http://127.0.0.1:7860`. Enter any product review to get predicted sentiment, category, retrieved neighbors, and a generated rationale.
 
-### 2. Full Pipeline Reconstruction
-If you wish to completely rebuild the project from absolute zero (re-downloading HuggingFace streams, parsing, training, evaluating, and writing the final `.ipynb`):
+### Full Rebuild from Scratch
 ```bash
 cd implementation
 python build_final.py
 ```
-*Warning: Running the complete end-to-end multi-epoch pipeline on CPU will take approximately 10-15 minutes.*
+Re-streams data from HuggingFace, retrains both models, re-extracts embeddings, and regenerates the notebook output.
+
+> **Note:** Full CPU training (2 encoder epochs + 1 decoder epoch) takes roughly 10–20 minutes depending on hardware.
 
 ---
 
-## 📊 Ablation Study Results
+## Ablation Results
 
-An ablation study was conducted to prove the necessity of the Retrieval mechanism. The metric of evaluation was **Perplexity (PPL)**, which measures the exponential log-likelihood of the causal generation.
+Perplexity (PPL) measures how confidently the decoder assigns probability to held-out tokens — lower is better.
 
-| Configuration | Sentiment Accuracy | Category Accuracy | Decoder Perplexity |
-|---------------|--------------------|-------------------|--------------------|
-| **No-RAG (Baseline)** | 85.07% | 86.48% | **~50.2** (High Entropy) |
-| **Full-RAG**  | 85.07% | 86.48% | **~12.4** (Low Entropy) |
+| Configuration | Polarity Accuracy | Category Accuracy | Decoder PPL |
+|---------------|:-----------------:|:-----------------:|:-----------:|
+| No RAG (baseline) | 85.07% | 86.48% | ~50.2 |
+| **Full RAG** | **85.07%** | **86.48%** | **~12.4** |
 
-**Conclusion**: The stark reduction in perplexity definitively proves that providing explicitly retrieved nearest-neighbor textual contexts radically stabilizes the causal probability distribution of the Decoder model.
+Retrieval context provides a ~4× reduction in perplexity, confirming that nearest-neighbor passages significantly constrain the decoder's token distribution without changing classification accuracy (which depends solely on the encoder).
